@@ -64,19 +64,14 @@ pipeline {
 
         stage('Execute Ansible Cloud Playbook') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    sh """
-                        ansible-playbook ec2_provision.yml \
-                        ${env.CHECK_FLAG} \
-                        -e "env=${params.ENVIRONMENT}" \
-                        -e "state=${env.TARGET_STATE}" \
-                        -e "region=${params.AWS_REGION}" \
-                        -e "key_pair_name=${params.KEY_PAIR_NAME}"
-                    """
-                }
+                sh """
+                    ansible-playbook ec2_provision.yml \
+                    ${env.CHECK_FLAG} \
+                    -e "env=${params.ENVIRONMENT}" \
+                    -e "state=${env.TARGET_STATE}" \
+                    -e "region=${params.AWS_REGION}" \
+                    -e "key_pair_name=${params.KEY_PAIR_NAME}"
+                """
             }
         }
     }
