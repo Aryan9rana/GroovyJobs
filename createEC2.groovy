@@ -61,7 +61,7 @@ pipeline {
                     fi
 
                     # Install the amazon.aws collection if missing
-                    if ! ansible-galaxy collection list 2>/dev/null | grep -qE '^amazon\.aws[[:space:]]'; then
+                    if ! ansible-galaxy collection list 2>/dev/null | grep -qE '^amazon[.]aws[[:space:]]'; then
                         ansible-galaxy collection install amazon.aws
                     fi
 
@@ -74,11 +74,7 @@ pipeline {
             steps {
                 sh '''
                     set -e
-                    set -- \
-                        -e "env=$TARGET_ENV" \
-                        -e "state=$TARGET_STATE" \
-                        -e "region=$TARGET_REGION" \
-                        -e "key_pair_name=$TARGET_KEY_PAIR"
+                    set -- -e "env=$TARGET_ENV" -e "state=$TARGET_STATE" -e "region=$TARGET_REGION" -e "key_pair_name=$TARGET_KEY_PAIR"
                     if [ -n "$CHECK_FLAG" ]; then
                         set -- "$CHECK_FLAG" "$@"
                     fi
