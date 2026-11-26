@@ -26,7 +26,7 @@
     - name: Verify an Amazon Linux 2023 AMI was found
       ansible.builtin.assert:
         that:
-          - al2023_amis.images | default([]) | length > 0
+          - al2023_amis.images | default([], true) | length > 0
         fail_msg: "No available Amazon Linux 2023 x86_64 AMI found in region {{ aws_region }}."
       when: instance_state == 'present'
 
@@ -46,7 +46,7 @@
     - name: Verify at least one available Subnet exists
       ansible.builtin.assert:
         that:
-          - vpc_subnets.subnets | default([]) | length > 0
+          - vpc_subnets.subnets | default([], true) | length > 0
         fail_msg: "No available VPC subnets found in region {{ aws_region }}."
       when: instance_state == 'present'
 
@@ -96,7 +96,7 @@
       register: ec2_result
       when:
         - instance_state == 'present'
-        - not ansible_check_mode or (sg_result.group_id | default('') | length > 0)
+        - not ansible_check_mode or (sg_result.group_id | default('', true) | length > 0)
 
     - name: 4a (Dry-run). Summarize EC2 launch when Security Group does not exist yet
       ansible.builtin.debug:
@@ -108,7 +108,7 @@
       when:
         - instance_state == 'present'
         - ansible_check_mode
-        - sg_result.group_id | default('') | length == 0
+        - sg_result.group_id | default('', true) | length == 0
 
     - name: 4b. Terminate the EC2 Instance
       amazon.aws.ec2_instance:
@@ -136,7 +136,7 @@
         region: "{{ aws_region }}"
         group_id: "{{ item.group_id }}"
         state: absent
-      loop: "{{ managed_sgs.security_groups | default([]) }}"
+      loop: "{{ managed_sgs.security_groups | default([], true) }}"
       when: instance_state == 'absent'
 
     - name: 5. Output Provisioned Instance Details
@@ -147,4 +147,4 @@
           (SSH user: ec2-user)
       when:
         - instance_state == 'present'
-        - ec2_result.instances | default([]) | length > 0
+        - ec2_result.instances | default([], true) | length > 0
