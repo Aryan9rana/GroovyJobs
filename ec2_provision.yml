@@ -1,0 +1,67 @@
+---
+- name: Provision or Teardown AWS EC2 Infrastructure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aws_region: "{{ region | default('ap-south-1') }}"
+    env_name: "{{ env | default('dev') }}"
+    instance_state: "{{ state | default('present') }}"
+    instance_type_map:
+      dev: "t3.micro"
+      prod: "t3.small"
+
+  tasks:
+    - name: 1. Find the latest official Amazon Linux 2023 AMI
+      amazon.aws.ec2_ami_info:
+        region: "{{ aws_region }}"
+        owners: ["137112412989"] # Official Amazon Linux AWS Account ID
+        filters:
+          name: "al2023-ami-2023.*-x86_64"
+          state: "available"
+      register: al2023_amis
+      when: instance_state == 'present'
+
+    - name: Set latest Amazon Linux 2023 AMI ID fact
+      ansible.builtin.set_fact:
+        latest_ami_id: "{{ (al2023_amis.images | sort(attribute='creation_date') | last).image_id }}"
+      when: instance_state == 'present'
+
+    - name: 2. Ensure Security Group exists for SSH access
+      amazon.aws.ec2_security_group:
+        name: "ansible-{{ env_name }}-sg"
+        description: "Managed by Jenkins & Ansible for {{ env_name }}"
+        region: "{{ aws_region }}"
+        rules:
+          - proto: tcp
+            ports: [22]
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Allow SSH"
+        state: present
+      when: instance_state == 'present'
+
+    - name: 3. Launch or Terminate the EC2 Instance
+      amazon.aws.ec2_instance:
+        name: "jenkins-ansible-{{ env_name }}-node"
+        region: "{{ aws_region }}"
+        key_name: "{{ key_pair_name }}"
+        instance_type: "{{ instance_type_map[env_name] }}"
+        image_id: "{{ latest_ami_id | default(omit) }}"
+        security_group: "ansible-{{ env_name }}-sg"
+        network:
+          assign_public_ip: true
+        tags:
+          Environment: "{{ env_name }}"
+          ManagedBy: "Jenkins-Ansible"
+        wait: true
+        state: "{{ instance_state }}"
+      register: ec2_result
+
+    - name: 4. Output Provisioned Instance Details
+      ansible.builtin.debug:
+        msg: >
+          Instance {{ ec2_result.instances[0].instance_id }} is {{ ec2_result.instances[0].state.name }}
+          with Public IP: {{ ec2_result.instances[0].public_ip_address | default('N/A') }}
+          (SSH user: ec2-user)
+      when: instance_state == 'present' and ec2_result.instances | length > 0
