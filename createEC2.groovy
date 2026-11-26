@@ -22,6 +22,11 @@ pipeline {
             defaultValue: '',
             description: 'Optional: Existing AWS EC2 Key Pair name (leave blank to launch without SSH key)'
         )
+        string(
+            name: 'INSTANCE_NAME',
+            defaultValue: '',
+            description: 'Optional (for DESTROY): Exact EC2 Name tag (e.g. jenkins-ansible-dev-node-12) or Instance ID (i-...). Leave blank to destroy ALL instances for ENVIRONMENT'
+        )
         booleanParam(
             name: 'DRY_RUN',
             defaultValue: false,
@@ -30,11 +35,12 @@ pipeline {
     }
 
     environment {
-        TARGET_STATE    = "${params.ACTION == 'DESTROY' ? 'absent' : 'present'}"
-        CHECK_FLAG      = "${params.DRY_RUN ? '--check' : ''}"
-        TARGET_ENV      = "${params.ENVIRONMENT ?: 'dev'}"
-        TARGET_REGION   = "${params.AWS_REGION ?: 'ap-south-1'}"
-        TARGET_KEY_PAIR = "${params.KEY_PAIR_NAME ?: ''}"
+        TARGET_STATE         = "${params.ACTION == 'DESTROY' ? 'absent' : 'present'}"
+        CHECK_FLAG           = "${params.DRY_RUN ? '--check' : ''}"
+        TARGET_ENV           = "${params.ENVIRONMENT ?: 'dev'}"
+        TARGET_REGION        = "${params.AWS_REGION ?: 'ap-south-1'}"
+        TARGET_KEY_PAIR      = "${params.KEY_PAIR_NAME ?: ''}"
+        TARGET_INSTANCE_NAME = "${params.INSTANCE_NAME?.trim() ?: ''}"
     }
 
     stages {
@@ -74,7 +80,7 @@ pipeline {
             steps {
                 sh '''
                     set -e
-                    set -- -e "env=$TARGET_ENV" -e "state=$TARGET_STATE" -e "region=$TARGET_REGION" -e "key_pair_name=$TARGET_KEY_PAIR" -e "build_id=$BUILD_NUMBER"
+                    set -- -e "env=$TARGET_ENV" -e "state=$TARGET_STATE" -e "region=$TARGET_REGION" -e "key_pair_name=$TARGET_KEY_PAIR" -e "build_id=$BUILD_NUMBER" -e "target_instance=$TARGET_INSTANCE_NAME"
                     if [ -n "$CHECK_FLAG" ]; then
                         set -- "$CHECK_FLAG" "$@"
                     fi

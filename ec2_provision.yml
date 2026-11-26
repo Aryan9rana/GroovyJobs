@@ -9,6 +9,7 @@
     env_name: "{{ env | default('dev') }}"
     instance_state: "{{ state | default('present') }}"
     instance_name: "jenkins-ansible-{{ env_name }}-node-{{ build_id | default(now(utc=true, fmt='%Y%m%d%H%M%S'), true) }}"
+    destroy_target: "{{ target_instance | default('', true) | trim }}"
     instance_type_map:
       dev: "t3.micro"
       prod: "t3.small"
@@ -111,7 +112,34 @@
         - ansible_check_mode
         - sg_result.group_id | default('', true) | length == 0
 
-    - name: 4b. Terminate the EC2 Instance(s)
+    - name: 4b. Terminate specific EC2 Instance by ID
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        instance_ids:
+          - "{{ destroy_target }}"
+        wait: true
+        state: absent
+      register: ec2_destroy_id_result
+      when:
+        - instance_state == 'absent'
+        - destroy_target is match('^i-[0-9a-f]+$')
+
+    - name: 4b. Terminate EC2 Instance(s) by exact Name tag
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ destroy_target }}"
+          "tag:ManagedBy": "Jenkins-Ansible"
+          instance-state-name: ["pending", "running", "stopping", "stopped"]
+        wait: true
+        state: absent
+      register: ec2_destroy_name_result
+      when:
+        - instance_state == 'absent'
+        - destroy_target | length > 0
+        - not (destroy_target is match('^i-[0-9a-f]+$'))
+
+    - name: 4b. Terminate all EC2 Instances for environment
       amazon.aws.ec2_instance:
         region: "{{ aws_region }}"
         filters:
@@ -121,8 +149,10 @@
           instance-state-name: ["pending", "running", "stopping", "stopped"]
         wait: true
         state: absent
-      register: ec2_destroy_result
-      when: instance_state == 'absent'
+      register: ec2_destroy_all_result
+      when:
+        - instance_state == 'absent'
+        - destroy_target | length == 0
 
     - name: 4c. Find managed Security Group(s) for cleanup
       amazon.aws.ec2_security_group_info:
@@ -132,18 +162,31 @@
       register: managed_sgs
       when: instance_state == 'absent'
 
-    - name: 4d. Delete managed Security Group(s)
+    - name: 4d. Check for remaining active instances using managed Security Group(s)
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "instance.group-id": "{{ managed_sgs.security_groups | map(attribute='group_id') | list }}"
+          instance-state-name: ["pending", "running", "stopping", "stopped"]
+      register: remaining_sg_instances
+      when:
+        - instance_state == 'absent'
+        - managed_sgs.security_groups | default([], true) | length > 0
+
+    - name: 4e. Delete managed Security Group(s) when unused
       amazon.aws.ec2_security_group:
         region: "{{ aws_region }}"
         group_id: "{{ item.group_id }}"
         state: absent
       loop: "{{ managed_sgs.security_groups | default([], true) }}"
-      when: instance_state == 'absent'
+      when:
+        - instance_state == 'absent'
+        - remaining_sg_instances.instances | default([], true) | length == 0
 
     - name: 5. Output Provisioned Instance Details
       ansible.builtin.debug:
         msg: >
-          Instance {{ ec2_result.instances[0].instance_id }} is {{ ec2_result.instances[0].state.name }}
+          Instance {{ ec2_result.instances[0].instance_id }} ({{ instance_name }}) is {{ ec2_result.instances[0].state.name }}
           with Public IP: {{ ec2_result.instances[0].public_ip_address | default('N/A') }}
           (SSH user: ec2-user)
       when:
