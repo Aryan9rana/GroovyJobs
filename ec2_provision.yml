@@ -23,45 +23,128 @@
       register: al2023_amis
       when: instance_state == 'present'
 
+    - name: Verify an Amazon Linux 2023 AMI was found
+      ansible.builtin.assert:
+        that:
+          - al2023_amis.images | default([]) | length > 0
+        fail_msg: "No available Amazon Linux 2023 x86_64 AMI found in region {{ aws_region }}."
+      when: instance_state == 'present'
+
     - name: Set latest Amazon Linux 2023 AMI ID fact
       ansible.builtin.set_fact:
         latest_ami_id: "{{ (al2023_amis.images | sort(attribute='creation_date') | last).image_id }}"
       when: instance_state == 'present'
 
-    - name: 2. Ensure Security Group exists for SSH access
+    - name: 2. Find an available Subnet in the region
+      amazon.aws.ec2_vpc_subnet_info:
+        region: "{{ aws_region }}"
+        filters:
+          state: "available"
+      register: vpc_subnets
+      when: instance_state == 'present'
+
+    - name: Verify at least one available Subnet exists
+      ansible.builtin.assert:
+        that:
+          - vpc_subnets.subnets | default([]) | length > 0
+        fail_msg: "No available VPC subnets found in region {{ aws_region }}."
+      when: instance_state == 'present'
+
+    - name: Set Target Subnet (prefer default/public subnet)
+      ansible.builtin.set_fact:
+        target_subnet: >-
+          {{
+            (
+              (vpc_subnets.subnets | selectattr('default_for_az', 'equalto', true) | list)
+              + (vpc_subnets.subnets | selectattr('map_public_ip_on_launch', 'equalto', true) | list)
+              + vpc_subnets.subnets
+            )[0]
+          }}
+      when: instance_state == 'present'
+
+    - name: 3. Ensure Security Group exists for SSH access in that VPC
       amazon.aws.ec2_security_group:
         name: "ansible-{{ env_name }}-sg"
         description: "Managed by Jenkins & Ansible for {{ env_name }}"
         region: "{{ aws_region }}"
+        vpc_id: "{{ target_subnet.vpc_id }}"
         rules:
           - proto: tcp
             ports: [22]
             cidr_ip: 0.0.0.0/0
             rule_desc: "Allow SSH"
         state: present
+      register: sg_result
       when: instance_state == 'present'
 
-    - name: 3. Launch or Terminate the EC2 Instance
+    - name: 4a. Launch the EC2 Instance
       amazon.aws.ec2_instance:
         name: "jenkins-ansible-{{ env_name }}-node"
         region: "{{ aws_region }}"
-        key_name: "{{ key_pair_name }}"
+        key_name: "{{ key_pair_name | default(omit, true) }}"
         instance_type: "{{ instance_type_map[env_name] }}"
-        image_id: "{{ latest_ami_id | default(omit) }}"
-        security_group: "ansible-{{ env_name }}-sg"
-        network:
-          assign_public_ip: true
+        image_id: "{{ latest_ami_id }}"
+        vpc_subnet_id: "{{ target_subnet.subnet_id }}"
+        security_group: "{{ sg_result.group_id }}"
+        network_interfaces:
+          - assign_public_ip: true
         tags:
           Environment: "{{ env_name }}"
           ManagedBy: "Jenkins-Ansible"
         wait: true
-        state: "{{ instance_state }}"
+        state: present
       register: ec2_result
+      when:
+        - instance_state == 'present'
+        - not ansible_check_mode or (sg_result.group_id | default('') | length > 0)
 
-    - name: 4. Output Provisioned Instance Details
+    - name: 4a (Dry-run). Summarize EC2 launch when Security Group does not exist yet
+      ansible.builtin.debug:
+        msg: >
+          [CHECK MODE] Security group 'ansible-{{ env_name }}-sg' does not exist yet in VPC
+          {{ target_subnet.vpc_id }}. Would launch 'jenkins-ansible-{{ env_name }}-node'
+          ({{ instance_type_map[env_name] }}) with AMI {{ latest_ami_id }} in subnet
+          {{ target_subnet.subnet_id }}.
+      when:
+        - instance_state == 'present'
+        - ansible_check_mode
+        - sg_result.group_id | default('') | length == 0
+
+    - name: 4b. Terminate the EC2 Instance
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "jenkins-ansible-{{ env_name }}-node"
+          "tag:Environment": "{{ env_name }}"
+          "tag:ManagedBy": "Jenkins-Ansible"
+          instance-state-name: ["pending", "running", "stopping", "stopped"]
+        wait: true
+        state: absent
+      register: ec2_destroy_result
+      when: instance_state == 'absent'
+
+    - name: 4c. Find managed Security Group(s) for cleanup
+      amazon.aws.ec2_security_group_info:
+        region: "{{ aws_region }}"
+        filters:
+          group-name: "ansible-{{ env_name }}-sg"
+      register: managed_sgs
+      when: instance_state == 'absent'
+
+    - name: 4d. Delete managed Security Group(s)
+      amazon.aws.ec2_security_group:
+        region: "{{ aws_region }}"
+        group_id: "{{ item.group_id }}"
+        state: absent
+      loop: "{{ managed_sgs.security_groups | default([]) }}"
+      when: instance_state == 'absent'
+
+    - name: 5. Output Provisioned Instance Details
       ansible.builtin.debug:
         msg: >
           Instance {{ ec2_result.instances[0].instance_id }} is {{ ec2_result.instances[0].state.name }}
           with Public IP: {{ ec2_result.instances[0].public_ip_address | default('N/A') }}
           (SSH user: ec2-user)
-      when: instance_state == 'present' and ec2_result.instances | length > 0
+      when:
+        - instance_state == 'present'
+        - ec2_result.instances | default([]) | length > 0
