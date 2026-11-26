@@ -12,9 +12,20 @@ pipeline {
             choices: ['CREATE', 'DESTROY'],
             description: 'CREATE launches the EC2 instance; DESTROY terminates it'
         )
-        string(
+        choice(
             name: 'AWS_REGION',
-            defaultValue: 'ap-south-1',
+            choices: [
+                'ap-south-1',
+                'us-east-1',
+                'us-east-2',
+                'us-west-1',
+                'us-west-2',
+                'eu-west-1',
+                'eu-central-1',
+                'ap-southeast-1',
+                'ap-southeast-2',
+                'ap-northeast-1'
+            ],
             description: 'AWS Region to deploy into'
         )
         string(
