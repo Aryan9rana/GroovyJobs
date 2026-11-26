@@ -74,7 +74,7 @@ pipeline {
             steps {
                 sh '''
                     set -e
-                    set -- -e "env=$TARGET_ENV" -e "state=$TARGET_STATE" -e "region=$TARGET_REGION" -e "key_pair_name=$TARGET_KEY_PAIR"
+                    set -- -e "env=$TARGET_ENV" -e "state=$TARGET_STATE" -e "region=$TARGET_REGION" -e "key_pair_name=$TARGET_KEY_PAIR" -e "build_id=$BUILD_NUMBER"
                     if [ -n "$CHECK_FLAG" ]; then
                         set -- "$CHECK_FLAG" "$@"
                     fi

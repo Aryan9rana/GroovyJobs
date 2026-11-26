@@ -8,6 +8,7 @@
     aws_region: "{{ region | default('ap-south-1') }}"
     env_name: "{{ env | default('dev') }}"
     instance_state: "{{ state | default('present') }}"
+    instance_name: "jenkins-ansible-{{ env_name }}-node-{{ build_id | default(now(utc=true, fmt='%Y%m%d%H%M%S'), true) }}"
     instance_type_map:
       dev: "t3.micro"
       prod: "t3.small"
@@ -50,14 +51,14 @@
         fail_msg: "No available VPC subnets found in region {{ aws_region }}."
       when: instance_state == 'present'
 
-    - name: Set Target Subnet (prefer default/public subnet)
+    - name: Set Target Subnet (prefer default/public subnet, deterministic order)
       ansible.builtin.set_fact:
         target_subnet: >-
           {{
             (
-              (vpc_subnets.subnets | selectattr('default_for_az', 'equalto', true) | list)
-              + (vpc_subnets.subnets | selectattr('map_public_ip_on_launch', 'equalto', true) | list)
-              + vpc_subnets.subnets
+              (vpc_subnets.subnets | sort(attribute='subnet_id') | selectattr('default_for_az', 'equalto', true) | list)
+              + (vpc_subnets.subnets | sort(attribute='subnet_id') | selectattr('map_public_ip_on_launch', 'equalto', true) | list)
+              + (vpc_subnets.subnets | sort(attribute='subnet_id'))
             )[0]
           }}
       when: instance_state == 'present'
@@ -79,7 +80,7 @@
 
     - name: 4a. Launch the EC2 Instance
       amazon.aws.ec2_instance:
-        name: "jenkins-ansible-{{ env_name }}-node"
+        name: "{{ instance_name }}"
         region: "{{ aws_region }}"
         key_name: "{{ key_pair_name | default(omit, true) }}"
         instance_type: "{{ instance_type_map[env_name] }}"
@@ -102,7 +103,7 @@
       ansible.builtin.debug:
         msg: >
           [CHECK MODE] Security group 'ansible-{{ env_name }}-sg' does not exist yet in VPC
-          {{ target_subnet.vpc_id }}. Would launch 'jenkins-ansible-{{ env_name }}-node'
+          {{ target_subnet.vpc_id }}. Would launch '{{ instance_name }}'
           ({{ instance_type_map[env_name] }}) with AMI {{ latest_ami_id }} in subnet
           {{ target_subnet.subnet_id }}.
       when:
@@ -110,11 +111,11 @@
         - ansible_check_mode
         - sg_result.group_id | default('', true) | length == 0
 
-    - name: 4b. Terminate the EC2 Instance
+    - name: 4b. Terminate the EC2 Instance(s)
       amazon.aws.ec2_instance:
         region: "{{ aws_region }}"
         filters:
-          "tag:Name": "jenkins-ansible-{{ env_name }}-node"
+          "tag:Name": "jenkins-ansible-{{ env_name }}-node*"
           "tag:Environment": "{{ env_name }}"
           "tag:ManagedBy": "Jenkins-Ansible"
           instance-state-name: ["pending", "running", "stopping", "stopped"]
